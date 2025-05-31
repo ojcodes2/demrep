@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Snake Game - POV & Pep Talk</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Inter', sans-serif; background-color: #1a202c; /* Tailwind gray-900 */ }
+        #game-container { width: 100vw; height: 100vh; display: block; }
+        #ui-container {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background-color: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 1.2em;
+            z-index: 10;
+        }
+        #minimap-container {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            border: 2px solid white;
+            border-radius: 8px;
+            background-color: rgba(0,0,0,0.7);
+            z-index: 10;
+        }
+        #minimap-canvas { display: block; }
+        #game-over-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            background-color: rgba(239, 68, 68, 0.8); /* Tailwind red-500 */
+            padding: 20px 40px;
+            border-radius: 12px;
+            font-size: 1.8em; /* Slightly reduced for more content */
+            text-align: center;
+            display: none; /* Hidden by default */
+            z-index: 100;
+            width: 90%;
+            max-width: 450px;
+        }
+        #game-over-message button {
+            background-color: #3b82f6; /* Tailwind blue-500 */
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.7em; /* Adjusted for consistency */
+            margin-top: 15px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #game-over-message button:hover {
+            background-color: #2563eb; /* Tailwind blue-600 */
+        }
+        #pep-talk-button {
+            background-color: #ca8a04; /* Tailwind yellow-600 */
+        }
+        #pep-talk-button:hover {
+            background-color: #a16207; /* Tailwind yellow-700 */
+        }
+        #pep-talk-container {
+            margin-top: 15px;
+            font-size: 0.6em; /* Smaller font for pep talk */
+            min-height: 40px; /* Space for text or loading */
+            background-color: rgba(0,0,0,0.3);
+            padding: 8px;
+            border-radius: 6px;
+        }
+        .loading-spinner {
+            border: 3px solid #f3f3f3; /* Light grey */
+            border-top: 3px solid #ca8a04; /* Yellow */
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            margin: 5px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: #a0aec0; /* Tailwind gray-500 */
+            font-size: 0.9em;
+            background-color: rgba(0,0,0,0.5);
+            padding: 8px;
+            border-radius: 6px;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container"></div>
+    <div id="ui-container">
+        Score: <span id="score">0</span>
+    </div>
+    <div id="minimap-container">
+        <canvas id="minimap-canvas"></canvas>
+    </div>
+    <div id="instructions">
+        Use Arrow Keys or WASD to Move
+    </div>
+    <div id="game-over-message">
+        <p>Game Over!</p>
+        <p>Final Score: <span id="final-score">0</span></p>
+        <button id="restart-button">Restart Game</button>
+        <button id="pep-talk-button">✨ Get Cosmic Serpent Pep Talk ✨</button>
+        <div id="pep-talk-container">
+            <p id="pep-talk-text"></p>
+            <div id="pep-talk-loading" class="loading-spinner" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        // --- Three.js Setup ---
+        let scene, camera, renderer;
+        // --- Game Objects ---
+        let snake, food, hurdles;
+        let snakeHeadMesh; // To attach eyes
+        // --- Game State ---
+        let direction = new THREE.Vector3(1, 0, 0); // Initial direction: positive X
+        let score = 0;
+        let gameOver = false;
+        const gridSize = 20; // Number of cells in each dimension of the grid
+        const cellSize = 1; // Size of each cell
+        const gameBounds = (gridSize / 2) * cellSize;
+        let snakeSpeed = 5; // Updates per second
+        let lastUpdateTime = 0;
+
+        // --- Minimap Setup ---
+        let minimapCanvas, minimapCtx;
+        const minimapSize = 150; // pixels
+        const minimapCellSize = minimapSize / gridSize;
+
+        // --- Materials ---
+        const snakeHeadMaterial = new THREE.MeshStandardMaterial({ color: 0x22c55e, /* Tailwind green-500 */ metalness: 0.4, roughness: 0.5 });
+        const snakeBodyMaterial = new THREE.MeshStandardMaterial({ color: 0x16a34a, /* Tailwind green-600 */ metalness: 0.3, roughness: 0.6 });
+        const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.2 });
+        const foodMaterial = new THREE.MeshStandardMaterial({ color: 0xef4444, /* Tailwind red-500 */ emissive: 0xcc0000, metalness: 0.5, roughness: 0.4 });
+        const hurdleMaterial = new THREE.MeshStandardMaterial({ color: 0x6b7280, /* Tailwind gray-500 */ metalness: 0.7, roughness: 0.3 });
+        const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x374151, /* Tailwind gray-700 */ metalness: 0.1, roughness: 0.9 });
+
+        // --- UI Elements ---
+        const scoreDisplay = document.getElementById('score');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const gameOverMessageDiv = document.getElementById('game-over-message');
+        const restartButton = document.getElementById('restart-button');
+        const pepTalkButton = document.getElementById('pep-talk-button');
+        const pepTalkText = document.getElementById('pep-talk-text');
+        const pepTalkLoading = document.getElementById('pep-talk-loading');
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a202c); // Tailwind gray-900
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('game-container').appendChild(renderer.domElement);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); // Slightly brighter ambient
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9); // Slightly brighter directional
+            directionalLight.position.set(15, 20, 10); // Adjusted position for better shadows
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 1024;
+            directionalLight.shadow.mapSize.height = 1024;
+            directionalLight.shadow.camera.near = 0.5;
+            directionalLight.shadow.camera.far = 50;
+            directionalLight.shadow.camera.left = -gridSize;
+            directionalLight.shadow.camera.right = gridSize;
+            directionalLight.shadow.camera.top = gridSize;
+            directionalLight.shadow.camera.bottom = -gridSize;
+            scene.add(directionalLight);
+            // const helper = new THREE.CameraHelper( directionalLight.shadow.camera ); // For debugging shadow camera
+            // scene.add( helper );
+
+
+            const groundGeometry = new THREE.PlaneGeometry(gridSize * cellSize, gridSize * cellSize);
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            resetGame();
+
+            minimapCanvas = document.getElementById('minimap-canvas');
+            minimapCtx = minimapCanvas.getContext('2d');
+            minimapCanvas.width = minimapSize;
+            minimapCanvas.height = minimapSize;
+
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('keydown', onKeyDown, false);
+            restartButton.addEventListener('click', () => {
+                gameOverMessageDiv.style.display = 'none';
+                pepTalkText.textContent = '';
+                pepTalkButton.disabled = false;
+                resetGame();
+                gameOver = false;
+                animate();
+            });
+            pepTalkButton.addEventListener('click', getCosmicSerpentPepTalk);
+
+            animate();
+        }
+
+        function createSnakeSegment(isHead) {
+            const radius = isHead ? cellSize * 0.45 : cellSize * 0.4; // Head slightly larger
+            const segmentGeometry = new THREE.SphereGeometry(radius, 16, 12); // Fewer segments for performance
+            const material = isHead ? snakeHeadMaterial : snakeBodyMaterial;
+            const segmentMesh = new THREE.Mesh(segmentGeometry, material);
+            segmentMesh.castShadow = true;
+            segmentMesh.receiveShadow = true;
+
+            if (isHead) {
+                snakeHeadMesh = segmentMesh; // Store head mesh reference
+                // Create eyes
+                const eyeRadius = cellSize * 0.08;
+                const eyeGeometry = new THREE.SphereGeometry(eyeRadius, 8, 6);
+                
+                const eyeL = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                const eyeR = new THREE.Mesh(eyeGeometry, eyeMaterial);
+
+                // Position eyes relative to head
+                // Assuming head moves along X initially, eyes are on Z offset, Y up
+                eyeL.position.set(radius * 0.5, radius * 0.3, radius * 0.6); // x forward, y up, z left
+                eyeR.position.set(radius * 0.5, radius * 0.3, -radius * 0.6); // x forward, y up, z right
+                
+                segmentMesh.add(eyeL);
+                segmentMesh.add(eyeR);
+            }
+            return segmentMesh;
+        }
+
+        function resetGame() {
+            if (snake) {
+                snake.forEach(segment => {
+                    if (segment === snakeHeadMesh) { // Remove eyes if they are children
+                        segment.children.slice().forEach(child => segment.remove(child));
+                    }
+                    scene.remove(segment);
+                });
+            }
+            if (food) scene.remove(food);
+            if (hurdles) hurdles.forEach(hurdle => scene.remove(hurdle));
+
+            snake = [];
+            const initialSnakeLength = 3;
+            for (let i = 0; i < initialSnakeLength; i++) {
+                const segment = createSnakeSegment(i === 0);
+                segment.position.set((-i * cellSize) + Math.floor(gridSize/2) * cellSize - gameBounds, cellSize / 2, Math.floor(gridSize/2) * cellSize - gameBounds);
+                snake.push(segment);
+                scene.add(segment);
+            }
+            direction.set(1, 0, 0); // Initial direction +X
+            updateHeadRotation(); // Orient head and eyes
+
+            spawnFood();
+            hurdles = [];
+            spawnHurdles(5);
+
+            score = 0;
+            scoreDisplay.innerText = score;
+            gameOver = false;
+            lastUpdateTime = 0;
+            pepTalkText.textContent = '';
+            pepTalkButton.style.display = 'block';
+            pepTalkButton.disabled = false;
+        }
+        
+        function updateHeadRotation() {
+            if (!snakeHeadMesh) return;
+            // Determine the target for the head to look at, based on current direction
+            const lookTarget = new THREE.Vector3();
+            lookTarget.copy(snakeHeadMesh.position).add(direction);
+            snakeHeadMesh.lookAt(lookTarget);
+        }
+
+
+        function spawnFood() {
+            if (food) scene.remove(food);
+            const foodGeometry = new THREE.SphereGeometry(cellSize * 0.35, 16, 16); // Slightly smaller food
+            food = new THREE.Mesh(foodGeometry, foodMaterial);
+            placeObjectRandomly(food);
+            food.position.y = cellSize / 2;
+            food.castShadow = true;
+            scene.add(food);
+        }
+
+        function spawnHurdles(count) {
+            for (let i = 0; i < count; i++) {
+                const hurdleGeometry = new THREE.BoxGeometry(cellSize * 0.9, cellSize * 1.8, cellSize * 0.9); // Slightly thinner
+                const hurdle = new THREE.Mesh(hurdleGeometry, hurdleMaterial);
+                placeObjectRandomly(hurdle);
+                hurdle.position.y = cellSize * 0.9; // Adjusted for new height
+                hurdle.castShadow = true;
+                hurdle.receiveShadow = true;
+                hurdles.push(hurdle);
+                scene.add(hurdle);
+            }
+        }
+
+        function placeObjectRandomly(object) {
+            let positionOk = false;
+            let randomX, randomZ;
+            let attempts = 0;
+            const maxAttempts = gridSize * gridSize;
+
+            while(!positionOk && attempts < maxAttempts) {
+                randomX = Math.floor(Math.random() * gridSize) * cellSize - gameBounds + cellSize / 2;
+                randomZ = Math.floor(Math.random() * gridSize) * cellSize - gameBounds + cellSize / 2;
+                positionOk = true;
+                attempts++;
+
+                for (const segment of snake) {
+                    if (segment.position.x === randomX && segment.position.z === randomZ) {
+                        positionOk = false; break;
+                    }
+                }
+                if (!positionOk) continue;
+
+                if (object.geometry.type === "BoxGeometry" && hurdles) { // Check if it's a hurdle
+                     for (const h of hurdles) {
+                        if (h !== object && h.position.x === randomX && h.position.z === randomZ) { // Don't check against self
+                            positionOk = false; break;
+                        }
+                    }
+                }
+                if (!positionOk) continue;
+
+                if (food && food !== object) {
+                     if (food.position.x === randomX && food.position.z === randomZ) {
+                        positionOk = false;
+                    }
+                }
+            }
+            if (!positionOk) {
+                console.warn("Could not find a free spot to place object. Placing at default (0,0).");
+                randomX = 0; randomZ = 0; // Fallback, might be on snake
+            }
+            object.position.set(randomX, object.position.y, randomZ);
+        }
+
+        function updateSnake() {
+            if (gameOver) return;
+
+            const head = snake[0];
+            const newHeadPosition = head.position.clone().add(direction.clone().multiplyScalar(cellSize));
+
+            if (newHeadPosition.x >= gameBounds - cellSize/2 || newHeadPosition.x < -gameBounds + cellSize/2 ||
+                newHeadPosition.z >= gameBounds - cellSize/2 || newHeadPosition.z < -gameBounds + cellSize/2) {
+                triggerGameOver("wall"); return;
+            }
+
+            for (let i = 1; i < snake.length; i++) {
+                if (newHeadPosition.distanceTo(snake[i].position) < cellSize * 0.8) { // Adjusted collision threshold for spheres
+                    triggerGameOver("self"); return;
+                }
+            }
+
+            for (const hurdle of hurdles) {
+                 // Using bounding box intersection for more accurate hurdle collision
+                const hurdleBox = new THREE.Box3().setFromObject(hurdle);
+                const headBox = new THREE.Box3().setFromObject(head); // Check current head against future hurdle pos
+                headBox.min.copy(newHeadPosition).subScalar(cellSize * 0.4); // Approximate head bounding box at new position
+                headBox.max.copy(newHeadPosition).addScalar(cellSize * 0.4);
+
+                if (headBox.intersectsBox(hurdleBox)) {
+                    triggerGameOver("hurdle");
+                    return;
+                }
+            }
+
+            for (let i = snake.length - 1; i > 0; i--) {
+                snake[i].position.copy(snake[i - 1].position);
+            }
+            head.position.copy(newHeadPosition);
+            updateHeadRotation(); // Update head orientation after moving
+
+            if (newHeadPosition.distanceTo(food.position) < cellSize * 0.8) { // Adjusted collision for spheres
+                score++;
+                scoreDisplay.innerText = score;
+                snakeSpeed = Math.max(2, snakeSpeed + 0.15); // Slightly faster speed increase
+
+                const newSegment = createSnakeSegment(false);
+                newSegment.position.copy(snake[snake.length - 1].position); // Add at current tail position
+                snake.push(newSegment);
+                scene.add(newSegment);
+
+                spawnFood();
+                if (score > 0 && score % 3 === 0) {
+                    spawnHurdles(1);
+                }
+            }
+        }
+
+        function updateCamera() {
+            if (gameOver || !snake || snake.length === 0) return;
+            const head = snake[0];
+            
+            // Camera position slightly behind and above the head
+            const cameraOffset = direction.clone().multiplyScalar(-cellSize * 2.0); // Further back
+            cameraOffset.y = cellSize * 1.2; // Slightly higher
+
+            camera.position.copy(head.position).add(cameraOffset);
+
+            // Look target: a point in front of the snake's head
+            const lookAtPosition = head.position.clone().add(direction.clone().multiplyScalar(cellSize * 5)); // Look further ahead
+            lookAtPosition.y = head.position.y + cellSize * 0.2; // Slightly elevated lookAt
+            camera.lookAt(lookAtPosition);
+        }
+
+        function drawMinimap() {
+            minimapCtx.fillStyle = 'rgba(0,0,0,0.7)';
+            minimapCtx.fillRect(0, 0, minimapSize, minimapSize);
+            const toMinimapX = (gameX) => (gameX + gameBounds) / (gameBounds * 2) * minimapSize;
+            const toMinimapZ = (gameZ) => (gameZ + gameBounds) / (gameBounds * 2) * minimapSize;
+
+            minimapCtx.fillStyle = foodMaterial.color.getStyle(); // Use material color
+            minimapCtx.beginPath();
+            minimapCtx.arc(toMinimapX(food.position.x), toMinimapZ(food.position.z), minimapCellSize * 0.35, 0, 2 * Math.PI);
+            minimapCtx.fill();
+
+            minimapCtx.fillStyle = hurdleMaterial.color.getStyle();
+            hurdles.forEach(hurdle => {
+                minimapCtx.fillRect(toMinimapX(hurdle.position.x - cellSize / 2), toMinimapZ(hurdle.position.z - cellSize / 2), minimapCellSize * 0.9, minimapCellSize * 0.9);
+            });
+
+            snake.forEach((segment, index) => {
+                minimapCtx.fillStyle = (index === 0) ? snakeHeadMaterial.color.getStyle() : snakeBodyMaterial.color.getStyle();
+                minimapCtx.beginPath();
+                minimapCtx.arc(
+                    toMinimapX(segment.position.x), 
+                    toMinimapZ(segment.position.z), 
+                    (index === 0 ? minimapCellSize * 0.45 : minimapCellSize * 0.4), 
+                    0, 2 * Math.PI
+                );
+                minimapCtx.fill();
+            });
+        }
+
+        function triggerGameOver(reason = "unknown") {
+            gameOver = true;
+            finalScoreDisplay.innerText = score;
+            gameOverMessageDiv.style.display = 'flex';
+            gameOverMessageDiv.dataset.reason = reason;
+        }
+
+        async function getCosmicSerpentPepTalk() {
+            pepTalkText.textContent = '';
+            pepTalkLoading.style.display = 'block';
+            pepTalkButton.disabled = true;
+
+            const userScore = score;
+            const prompt = `You are the Cosmic Serpent, wise and ancient. A player of your 3D snake game just finished with a score of ${userScore}. Give them a short, fun, and encouraging pep talk (around 15-30 words). Be a bit quirky and mystical. If their score is low (e.g. less than 5), maybe a tiny, playful hint about watching out for hurdles or walls.`;
+
+            let chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+            const payload = { contents: chatHistory };
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error("Gemini API Error:", errorData);
+                    pepTalkText.textContent = "The Cosmic Serpent is meditating... try again later.";
+                    throw new Error(`API request failed with status ${response.status}: ${errorData.error?.message || 'Unknown error'}`);
+                }
+
+                const result = await response.json();
+
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                    const text = result.candidates[0].content.parts[0].text;
+                    pepTalkText.textContent = text;
+                } else {
+                    console.error("Unexpected response structure from Gemini API:", result);
+                    pepTalkText.textContent = "The Cosmic Serpent's wisdom is currently elusive...";
+                }
+            } catch (error) {
+                console.error('Error fetching pep talk:', error);
+                pepTalkText.textContent = 'The Cosmic Serpent seems to be on a cosmic journey. Try again!';
+            } finally {
+                pepTalkLoading.style.display = 'none';
+            }
+        }
+
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onKeyDown(event) {
+            if (gameOver) return;
+
+            const currentDirectionX = direction.x;
+            const currentDirectionZ = direction.z;
+            let newDir = null;
+
+            switch (event.key) {
+                case 'ArrowUp': case 'w':
+                    if (currentDirectionZ === 0) newDir = new THREE.Vector3(0, 0, -1); // Prevent moving into Z if already moving on Z
+                    break;
+                case 'ArrowDown': case 's':
+                    if (currentDirectionZ === 0) newDir = new THREE.Vector3(0, 0, 1);
+                    break;
+                case 'ArrowLeft': case 'a':
+                    if (currentDirectionX === 0) newDir = new THREE.Vector3(-1, 0, 0); // Prevent moving into X if already moving on X
+                    break;
+                case 'ArrowRight': case 'd':
+                    if (currentDirectionX === 0) newDir = new THREE.Vector3(1, 0, 0);
+                    break;
+            }
+
+            // Only update direction if a new valid direction is chosen AND it's not a 180-degree turn
+            if (newDir && direction.dot(newDir) === 0) {
+                direction.copy(newDir);
+                updateHeadRotation(); // Rotate head immediately on direction change
+            }
+        }
+
+        function animate(currentTime) {
+            if (gameOver) return;
+            requestAnimationFrame(animate);
+            const deltaTime = (currentTime - (lastUpdateTime || 0)) / 1000;
+            if (deltaTime > (1 / snakeSpeed)) {
+                updateSnake();
+                lastUpdateTime = currentTime;
+            }
+            updateCamera();
+            drawMinimap();
+            renderer.render(scene, camera);
+        }
+        init();
+    </script>
+</body>
+</html>
